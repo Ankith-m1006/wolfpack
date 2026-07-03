@@ -15,9 +15,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { remember } from '@/services/cognee';
+import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from 'expo-speech-recognition';
 
-const MEMORY_COUNT = 8;
+import { listFragments, remember, rememberPhoto } from '@/services/cognee';
 const BTN = 200;
 const BORDER = 3;
 const PURPLE = '#7C5CFC';
@@ -32,7 +37,6 @@ const DIAL_ITEMS = [
     label: 'PHOTO',
     toX: -135,
     toY: -20,
-    onPress: () => console.log('TODO: photo'),
   },
   {
     key: 'place',
@@ -40,7 +44,6 @@ const DIAL_ITEMS = [
     label: 'PLACE',
     toX: 135,
     toY: -20,
-    onPress: () => console.log('TODO: place'),
   },
 ];
 
@@ -127,6 +130,13 @@ export default function CaptureScreen() {
   const [recordState, setRecordState] = useState<RecordState>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [showTick, setShowTick] = useState(false);
+  const [placeLoading, setPlaceLoading] = useState(false);
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [voiceUploading, setVoiceUploading] = useState(false);
+
+  const [memoryCount, setMemoryCount] = useState(0);
+
+  const transcriptRef = useRef<string>('');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -151,6 +161,10 @@ export default function CaptureScreen() {
   const dialAnims = useRef(DIAL_ITEMS.map(() => new Animated.Value(0))).current;
 
   useEffect(() => {
+    listFragments().then(f => setMemoryCount(f.length)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
@@ -169,6 +183,19 @@ export default function CaptureScreen() {
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
 
+
+  // ── Speech recognition events ───────────────────────────────────────────────
+  useSpeechRecognitionEvent('result', (event) => {
+    const text = event.results[0]?.transcript ?? '';
+    if (text) transcriptRef.current = text;
+  });
+
+  // Android auto-stops after silence — restart if still in recording state
+  useSpeechRecognitionEvent('end', () => {
+    if (recordState === 'recording') {
+      ExpoSpeechRecognitionModule.start({ lang: 'en-US', interimResults: true, continuous: false });
+    }
+  });
 
   // ── Speed dial ──────────────────────────────────────────────────────────────
   function openDial() {
@@ -250,7 +277,20 @@ export default function CaptureScreen() {
   }
 
   // ── Lock into recording ─────────────────────────────────────────────────────
-  function lockIntoRecording() {
+  async function lockIntoRecording() {
+    const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!granted) {
+      setError('Microphone permission required — please enable in settings.');
+      setRecordState('idle');
+      Animated.timing(primingAnim, { toValue: 0, duration: 300, useNativeDriver: true }).start();
+      return;
+    }
+
+    transcriptRef.current = '';
+    console.log('[voice] starting speech recognition...');
+    ExpoSpeechRecognitionModule.start({ lang: 'en-US', interimResults: true, continuous: false });
+    console.log('[voice] recognition started');
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     closeDial();
     setRecordState('recording');
@@ -299,21 +339,25 @@ export default function CaptureScreen() {
   // ── Recording controls ──────────────────────────────────────────────────────
   function handlePause() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    console.log('[voice] pausing recognition');
+    ExpoSpeechRecognitionModule.stop();
     setRecordState('paused');
     stopPulse();
-    stopBars(true); // freeze bars in place
+    stopBars(true);
     pauseTimer();
   }
 
   function handleResume() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    console.log('[voice] resuming recognition');
+    ExpoSpeechRecognitionModule.start({ lang: 'en-US', interimResults: true, continuous: false });
     setRecordState('recording');
     startPulse();
     startBars();
     startTimer();
   }
 
-  function handleStop() {
+  async function handleStop() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     primingRef.current?.stop();
     primingRef.current = null;
@@ -325,21 +369,37 @@ export default function CaptureScreen() {
       Animated.timing(controlsAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
       Animated.timing(primingAnim,  { toValue: 0, duration: 400, useNativeDriver: true }),
     ]).start();
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    ExpoSpeechRecognitionModule.stop();
+    const transcript = transcriptRef.current.trim();
+    transcriptRef.current = '';
+    console.log('[voice] transcript:', transcript);
+
+    setVoiceUploading(true);
+    setError(null);
+    try {
+      if (!transcript) throw new Error('No speech detected — please try again.');
+      await remember(transcript);
+      console.log('[voice] transcript saved to Cognee');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showTickAnimation();
+    } catch (e) {
+      console.error('[voice] error:', e instanceof Error ? e.message : e);
+      setError(e instanceof Error ? e.message : 'Failed to save voice note.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setVoiceUploading(false);
+    }
+  }
+
+  function showTickAnimation() {
     setShowTick(true);
     tickAnim.setValue(0);
-    Animated.spring(tickAnim, {
-      toValue: 1,
-      useNativeDriver: true,
-      tension: 180,
-      friction: 8,
-    }).start();
+    Animated.spring(tickAnim, { toValue: 1, useNativeDriver: true, tension: 180, friction: 8 }).start();
     setTimeout(() => {
-      Animated.timing(tickAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(
-        () => setShowTick(false),
-      );
+      Animated.timing(tickAnim, { toValue: 0, duration: 200, useNativeDriver: true })
+        .start(() => setShowTick(false));
     }, 1300);
-    console.log('TODO: send voice recording to Cognee');
   }
 
   // ── Text submit ─────────────────────────────────────────────────────────────
@@ -359,6 +419,78 @@ export default function CaptureScreen() {
       setError(e instanceof Error ? e.message : 'Something went wrong.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handlePlaceCapture() {
+    setPlaceLoading(true);
+    setError(null);
+    setSuccess(false);
+    closeDial();
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setError('Location permission required — please enable in settings.');
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const [geo] = await Location.reverseGeocodeAsync({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      });
+      const parts = [geo.name, geo.street, geo.district, geo.city, geo.country]
+        .filter(Boolean)
+        .join(', ');
+      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const text = `Location captured: ${parts} at ${time}`;
+      await remember(text);
+      setSuccess(true);
+      if (successTimer.current) clearTimeout(successTimer.current);
+      successTimer.current = setTimeout(() => setSuccess(false), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not capture location.');
+    } finally {
+      setPlaceLoading(false);
+    }
+  }
+
+  async function handlePhotoCapture() {
+    console.log('[photo] handlePhotoCapture called');
+    setPhotoLoading(true);
+    setError(null);
+    setSuccess(false);
+    closeDial();
+    try {
+      console.log('[photo] requesting permission...');
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      console.log('[photo] permission status:', status);
+      if (status !== 'granted') {
+        setError('Camera permission required — please enable in settings.');
+        return;
+      }
+      console.log('[photo] launching camera...');
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
+      console.log('[photo] launchCameraAsync result:', JSON.stringify(result));
+      if (result.canceled) return;
+      const uri = result.assets[0].uri;
+      console.log('[photo] captured, uri:', uri);
+      await rememberPhoto(uri);
+      console.log('[photo] successfully saved to Cognee');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccess(true);
+      if (successTimer.current) clearTimeout(successTimer.current);
+      successTimer.current = setTimeout(() => setSuccess(false), 2000);
+    } catch (e) {
+      console.error('[photo] error:', e instanceof Error ? e.message : e);
+      setError(e instanceof Error ? e.message : 'Failed to save photo.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setPhotoLoading(false);
     }
   }
 
@@ -382,7 +514,7 @@ export default function CaptureScreen() {
         <View style={styles.header}>
           <View style={styles.pill}>
             <Ionicons name="calendar-outline" size={16} color="#fff" />
-            <Text style={styles.pillText}>{MEMORY_COUNT} Memories Today</Text>
+            <Text style={styles.pillText}>{memoryCount} Memories</Text>
           </View>
           <Text style={styles.heading}>CAPTURE YOUR DAY</Text>
           <Text style={styles.subtext}>
@@ -412,11 +544,18 @@ export default function CaptureScreen() {
                   ]}
                 >
                   <TouchableOpacity
-                    style={styles.sideButton}
-                    onPress={() => { item.onPress(); closeDial(); }}
+                    style={[
+                      styles.sideButton,
+                      ((item.key === 'place' && placeLoading) || (item.key === 'photo' && photoLoading)) && styles.sideButtonDisabled,
+                    ]}
+                    onPress={item.key === 'place' ? handlePlaceCapture : handlePhotoCapture}
+                    disabled={(item.key === 'place' && placeLoading) || (item.key === 'photo' && photoLoading)}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name={item.icon} size={26} color="#fff" />
+                    {(item.key === 'place' && placeLoading) || (item.key === 'photo' && photoLoading)
+                      ? <ActivityIndicator size="small" color="#fff" />
+                      : <Ionicons name={item.icon} size={26} color="#fff" />
+                    }
                     <Text style={styles.sideButtonLabel}>{item.label}</Text>
                   </TouchableOpacity>
                 </Animated.View>
@@ -478,10 +617,13 @@ export default function CaptureScreen() {
             <TouchableOpacity
               style={[styles.controlButton, styles.stopButton]}
               onPress={handleStop}
+              disabled={voiceUploading}
               activeOpacity={0.7}
             >
-              <Ionicons name="stop" size={20} color="#fff" />
-              <Text style={styles.controlLabel}>STOP</Text>
+              {voiceUploading
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Ionicons name="stop" size={20} color="#fff" />}
+              <Text style={styles.controlLabel}>{voiceUploading ? 'SAVING...' : 'STOP'}</Text>
             </TouchableOpacity>
           </Animated.View>
 
@@ -627,6 +769,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
   },
+  sideButtonDisabled: { opacity: 0.5 },
   sideButtonLabel: {
     color: '#fff',
     fontSize: 10,

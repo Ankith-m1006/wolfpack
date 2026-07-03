@@ -1,10 +1,8 @@
-// TODO: Replace mock data with real fragment list once a /list or
-// /datasets/{id}/data endpoint is wired into cognee.ts
-
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
 import {
-  Image,
+  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +11,8 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { listFragments, type Fragment, type FragmentType } from '@/services/cognee';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
 // Backgrounds and neutrals match CaptureScreen / AskScreen exactly.
@@ -26,97 +26,31 @@ const PURPLE = '#7C5CFC';
 const GOLD = '#F5A623';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-type FragmentType = 'voice' | 'photo' | 'location' | 'text';
-
-type Fragment = {
-  id: string;
-  type: FragmentType;
-  timestamp: string;
-  // voice
-  transcript?: string;
-  duration?: string;
-  // photo
-  title?: string;
-  subtitle?: string;
-  thumbnailUri?: string;
-  // location
-  placeName?: string;
-  cityCountry?: string;
-  // text
-  content?: string;
-};
-
 type DayGroup = { label: string; fragments: Fragment[] };
 
-// ─── Mock data ───────────────────────────────────────────────────────────────
-const MOCK_FRAGMENTS: DayGroup[] = [
-  {
-    label: 'Today',
-    fragments: [
-      {
-        id: '1',
-        type: 'voice',
-        timestamp: '9:41 PM',
-        transcript: '"Met Doug at Mirage, awesome guy!"',
-        duration: '00:12',
-      },
-      {
-        id: '2',
-        type: 'photo',
-        timestamp: '9:33 PM',
-        title: 'Mirage Bar Receipt',
-        subtitle: '₹1,250 • Paid via Card',
-      },
-      {
-        id: '3',
-        type: 'location',
-        timestamp: '9:15 PM',
-        placeName: 'Mirage, Koramangala',
-        cityCountry: 'Bengaluru, India',
-      },
-      {
-        id: '4',
-        type: 'text',
-        timestamp: '9:50 PM',
-        content: 'Sat with a guy named Doug. Works at Cognee.',
-      },
-    ],
-  },
-  {
-    label: 'Yesterday',
-    fragments: [
-      {
-        id: '5',
-        type: 'voice',
-        timestamp: '11:02 PM',
-        transcript: '"Walked back home around 12:30 AM. Had a great night."',
-        duration: '00:08',
-      },
-    ],
-  },
-];
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function dayLabel(date: Date): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 86400000);
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  if (d.getTime() === today.getTime()) return 'Today';
+  if (d.getTime() === yesterday.getTime()) return 'Yesterday';
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
 
-// ─── Waveform ─────────────────────────────────────────────────────────────────
-const WAVE_BARS = [
-  8, 14, 20, 12, 26, 10, 22, 16, 28, 8,
-  18, 24, 12, 20, 10, 26, 14, 22, 8, 18,
-  24, 10, 20, 16, 28, 12, 22, 8, 18, 14,
-];
+function groupByDay(fragments: Fragment[]): DayGroup[] {
+  const map = new Map<string, Fragment[]>();
+  for (const f of fragments) {
+    const label = dayLabel(f.createdAt);
+    if (!map.has(label)) map.set(label, []);
+    map.get(label)!.push(f);
+  }
+  return Array.from(map.entries()).map(([label, frags]) => ({ label, fragments: frags }));
+}
 
-function Waveform() {
-  return (
-    <View style={styles.waveform}>
-      {WAVE_BARS.map((h, i) => (
-        <View
-          key={i}
-          style={[
-            styles.waveBar,
-            { height: h, opacity: i % 3 === 0 ? 1 : 0.4 },
-          ]}
-        />
-      ))}
-    </View>
-  );
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 // ─── Type meta ───────────────────────────────────────────────────────────────
@@ -124,10 +58,8 @@ const TYPE_META: Record<
   FragmentType,
   { label: string; icon: React.ComponentProps<typeof Ionicons>['name']; color: string }
 > = {
-  voice:    { label: 'Voice Note',  icon: 'mic',           color: PURPLE },
-  photo:    { label: 'Photo (OCR)', icon: 'camera',        color: GOLD   },
-  location: { label: 'Location',    icon: 'location-sharp', color: PURPLE },
-  text:     { label: 'Text Note',   icon: 'document-text', color: GOLD   },
+  photo: { label: 'Photo', icon: 'camera',        color: GOLD   },
+  text:  { label: 'Note',  icon: 'document-text', color: GOLD   },
 };
 
 // ─── Icon circle ─────────────────────────────────────────────────────────────
@@ -141,56 +73,23 @@ function TypeIcon({ type }: { type: FragmentType }) {
 }
 
 // ─── Cards ───────────────────────────────────────────────────────────────────
-function VoiceCard({ fragment }: { fragment: Fragment }) {
+function FragmentCard({ fragment }: { fragment: Fragment }) {
+  const meta = TYPE_META[fragment.type];
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <TypeIcon type="voice" />
+        <TypeIcon type={fragment.type} />
         <View style={styles.cardMeta}>
-          <Text style={[styles.typeLabel, { color: PURPLE }]}>
-            {TYPE_META.voice.label}
-          </Text>
-          <Text style={styles.transcript}>{fragment.transcript}</Text>
-        </View>
-        <Text style={styles.timestamp}>{fragment.timestamp}</Text>
-      </View>
-      <View style={styles.voiceFooter}>
-        <Waveform />
-        <View style={styles.voiceRight}>
-          <TouchableOpacity
-            style={styles.playButton}
-            onPress={() => console.log('TODO: play audio')}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="play" size={16} color={TEXT} />
-          </TouchableOpacity>
-          <Text style={styles.duration}>{fragment.duration}</Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function PhotoCard({ fragment }: { fragment: Fragment }) {
-  return (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <TypeIcon type="photo" />
-        <View style={styles.cardMeta}>
-          <Text style={[styles.typeLabel, { color: GOLD }]}>
-            {TYPE_META.photo.label}
-          </Text>
-          <Text style={styles.mainText}>{fragment.title}</Text>
-          {fragment.subtitle && (
-            <Text style={styles.subText}>{fragment.subtitle}</Text>
+          <Text style={[styles.typeLabel, { color: meta.color }]}>{meta.label}</Text>
+          {fragment.type === 'photo' ? (
+            <Text style={styles.subText}>{fragment.name}</Text>
+          ) : (
+            <Text style={styles.mainText}>{fragment.preview || '—'}</Text>
           )}
         </View>
         <View style={styles.cardRight}>
-          <Text style={styles.timestamp}>{fragment.timestamp}</Text>
-          {fragment.thumbnailUri ? (
-            <Image source={{ uri: fragment.thumbnailUri }} style={styles.thumbnail} />
-          ) : (
-            // Placeholder when no real image exists yet
+          <Text style={styles.timestamp}>{formatTime(fragment.createdAt)}</Text>
+          {fragment.type === 'photo' && (
             <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
               <Ionicons name="camera-outline" size={20} color={DIM} />
             </View>
@@ -201,67 +100,21 @@ function PhotoCard({ fragment }: { fragment: Fragment }) {
   );
 }
 
-function LocationCard({ fragment }: { fragment: Fragment }) {
-  return (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <TypeIcon type="location" />
-        <View style={styles.cardMeta}>
-          <Text style={[styles.typeLabel, { color: PURPLE }]}>
-            {TYPE_META.location.label}
-          </Text>
-          <Text style={styles.mainText}>{fragment.placeName}</Text>
-          {fragment.cityCountry && (
-            <Text style={styles.subText}>{fragment.cityCountry}</Text>
-          )}
-        </View>
-        <View style={styles.cardRight}>
-          <Text style={styles.timestamp}>{fragment.timestamp}</Text>
-          {fragment.thumbnailUri ? (
-            <Image source={{ uri: fragment.thumbnailUri }} style={styles.thumbnail} />
-          ) : (
-            <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
-              <Ionicons name="map-outline" size={20} color={DIM} />
-            </View>
-          )}
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function TextCard({ fragment }: { fragment: Fragment }) {
-  return (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <TypeIcon type="text" />
-        <View style={styles.cardMeta}>
-          <Text style={[styles.typeLabel, { color: GOLD }]}>
-            {TYPE_META.text.label}
-          </Text>
-          <Text style={styles.mainText}>{fragment.content}</Text>
-        </View>
-        <Text style={styles.timestamp}>{fragment.timestamp}</Text>
-      </View>
-    </View>
-  );
-}
-
-function FragmentCard({ fragment }: { fragment: Fragment }) {
-  if (fragment.type === 'voice')    return <VoiceCard fragment={fragment} />;
-  if (fragment.type === 'photo')    return <PhotoCard fragment={fragment} />;
-  if (fragment.type === 'location') return <LocationCard fragment={fragment} />;
-  return <TextCard fragment={fragment} />;
-}
-
 // ─── Screen ──────────────────────────────────────────────────────────────────
-const MEMORY_COUNT = 8;
-
 export default function MemoryScreen() {
   const router = useRouter();
+  const [groups, setGroups] = useState<DayGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // fragments is a separate variable so swapping in a real API response is one line.
-  const fragments: DayGroup[] = MOCK_FRAGMENTS;
+  useEffect(() => {
+    listFragments()
+      .then(frags => setGroups(groupByDay(frags)))
+      .catch(e => setError(e instanceof Error ? e.message : 'Failed to load memories.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const totalCount = groups.reduce((n, g) => n + g.fragments.length, 0);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -275,7 +128,7 @@ export default function MemoryScreen() {
         <View style={styles.pillRow}>
           <View style={styles.pill}>
             <Ionicons name="calendar-outline" size={16} color={TEXT} />
-            <Text style={styles.pillText}>{MEMORY_COUNT} Memories Today</Text>
+            <Text style={styles.pillText}>{totalCount} Memories</Text>
           </View>
         </View>
 
@@ -297,8 +150,19 @@ export default function MemoryScreen() {
           <Ionicons name="options-outline" size={20} color={MUTED} />
         </View>
 
+        {/* States */}
+        {loading && (
+          <ActivityIndicator size="large" color={GOLD} style={{ marginTop: 40 }} />
+        )}
+        {error && !loading && (
+          <Text style={styles.errorText}>{error}</Text>
+        )}
+        {!loading && !error && groups.length === 0 && (
+          <Text style={styles.emptyText}>No memories yet — start capturing!</Text>
+        )}
+
         {/* Fragment groups */}
-        {fragments.map(group => (
+        {groups.map(group => (
           <View key={group.label}>
             <Text style={styles.sectionHeader}>{group.label}</Text>
             <View style={styles.cardList}>
@@ -309,7 +173,6 @@ export default function MemoryScreen() {
           </View>
         ))}
 
-        {/* Bottom padding so FAB doesn't overlap last card */}
         <View style={{ height: 80 }} />
       </ScrollView>
 
@@ -458,40 +321,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Voice card
-  voiceFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+  errorText: {
+    color: '#FF5252',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 40,
   },
-  waveform: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    height: 32,
-  },
-  waveBar: {
-    width: 3,
-    borderRadius: 2,
-    backgroundColor: PURPLE,
-  },
-  voiceRight: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  playButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#2C2C2E',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  duration: {
+  emptyText: {
     color: MUTED,
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 40,
   },
   fab: {
     position: 'absolute',

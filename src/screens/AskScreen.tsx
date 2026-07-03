@@ -14,9 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { recall } from '@/services/cognee';
-
-const MEMORY_COUNT = 8;
+import { listFragments, recall } from '@/services/cognee';
 
 type MessageRole = 'user' | 'assistant' | 'error';
 
@@ -42,7 +40,12 @@ export default function AskScreen() {
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [memoryCount, setMemoryCount] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    listFragments().then(f => setMemoryCount(f.length)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
@@ -113,7 +116,7 @@ export default function AskScreen() {
         <View style={styles.header}>
           <View style={styles.pill}>
             <Ionicons name="calendar-outline" size={16} color="#fff" />
-            <Text style={styles.pillText}>{MEMORY_COUNT} Memories Today</Text>
+            <Text style={styles.pillText}>{memoryCount} Memories</Text>
           </View>
           <Text style={styles.heading}>ASK WOLFPACK</Text>
           <Text style={styles.subtext}>

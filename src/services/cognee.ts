@@ -2,7 +2,6 @@ import * as FileSystem from "expo-file-system/legacy";
 import config from "../config";
 import {
   CogneeError,
-  CognifyRequest,
   LoginResponse,
   RecallRequest,
   RecallResponse,
@@ -62,47 +61,38 @@ async function ensureLoggedIn(): Promise<void> {
 
 export async function remember(text: string): Promise<void> {
   await ensureLoggedIn();
-  console.log('[cognee] remember: starting /add');
+  console.log('[cognee] remember: starting /remember');
 
-  // React Native fetch can't serialize a Blob in FormData — write to a temp
-  // file and use a file:// URI instead, which RN handles correctly.
-  // Unique filename prevents Cognee from skipping cognify as "already completed".
+  // Write to a temp file — RN fetch can't serialize a Blob directly in FormData.
   const filename = `memory_${Date.now()}.txt`;
   const tempUri = `${FileSystem.cacheDirectory}${filename}`;
   await FileSystem.writeAsStringAsync(tempUri, text, { encoding: "utf8" });
 
   const formData = new FormData();
-  formData.append("files", { uri: tempUri, type: "text/plain", name: filename } as unknown as Blob);
-  formData.append("datasetName", config.DEFAULT_DATASET);
+  formData.append('data', { uri: tempUri, type: 'text/plain', name: filename } as unknown as Blob);
+  formData.append('datasetName', config.DEFAULT_DATASET);
 
-  const addRes = await authedFetch("/api/v1/add", {
-    method: "POST",
-    body: formData,
-  });
-
-  console.log('[cognee] /add status:', addRes.status);
-  // Drain the body so the connection is released cleanly.
-  await addRes.text().catch(() => {});
-  if (!addRes.ok) {
-    throw new CogneeError(`Failed to add memory: ${addRes.statusText}`, addRes.status);
-  }
-
-  console.log('[cognee] remember: starting /cognify');
-  const cognifyBody: CognifyRequest = { datasets: [config.DEFAULT_DATASET] };
-
-  const cognifyRes = await authedFetch("/api/v1/cognify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(cognifyBody),
-  });
-
-  console.log('[cognee] /cognify status:', cognifyRes.status);
-  const cognifyBody2 = await cognifyRes.text().catch(() => '');
-  console.log('[cognee] /cognify body:', cognifyBody2);
-  if (!cognifyRes.ok) {
-    throw new CogneeError(`Cognify failed ${cognifyRes.status}: ${cognifyBody2}`, cognifyRes.status);
-  }
+  const res = await authedFetch('/api/v1/remember', { method: 'POST', body: formData });
+  const body = await res.text().catch(() => '');
+  console.log('[cognee] /remember status:', res.status, 'body:', body);
+  if (!res.ok) throw new CogneeError(`Remember failed: ${res.statusText}`, res.status);
 }
+
+export async function rememberPhoto(localUri: string): Promise<void> {
+  await ensureLoggedIn();
+  console.log('[cognee] rememberPhoto: starting /remember');
+
+  const filename = `photo_${Date.now()}.jpg`;
+  const formData = new FormData();
+  formData.append('data', { uri: localUri, type: 'image/jpeg', name: filename } as unknown as Blob);
+  formData.append('datasetName', config.DEFAULT_DATASET);
+
+  const res = await authedFetch('/api/v1/remember', { method: 'POST', body: formData });
+  const body = await res.text().catch(() => '');
+  console.log('[cognee] rememberPhoto /remember status:', res.status, 'body:', body);
+  if (!res.ok) throw new CogneeError(`Remember photo failed: ${res.statusText}`, res.status);
+}
+
 
 export async function recall(query: string): Promise<string> {
   await ensureLoggedIn();
@@ -131,4 +121,81 @@ export async function recall(query: string): Promise<string> {
 
   // Return the top result's text, or empty string if nothing came back.
   return data[0]?.text ?? "";
+}
+
+export type FragmentType = 'photo' | 'text';
+
+export type Fragment = {
+  id: string;
+  name: string;
+  type: FragmentType;
+  createdAt: Date;
+  preview: string;
+};
+
+export type GraphNode = {
+  id: string;
+  label: string;
+  type: string;
+  properties: Record<string, unknown>;
+};
+
+export type GraphEdge = {
+  source: string;
+  target: string;
+  label: string;
+};
+
+export type GraphData = {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+};
+
+export async function getGraph(): Promise<GraphData> {
+  await ensureLoggedIn();
+  const res = await authedFetch(`/api/v1/datasets/${config.DEFAULT_DATASET_ID}/graph`, {
+    method: 'GET',
+  });
+  if (!res.ok) throw new CogneeError(`Failed to get graph: ${res.statusText}`, res.status);
+  return res.json() as Promise<GraphData>;
+}
+
+export async function listFragments(): Promise<Fragment[]> {
+  await ensureLoggedIn();
+
+  const res = await authedFetch(`/api/v1/datasets/${config.DEFAULT_DATASET_ID}/data`, {
+    method: 'GET',
+  });
+  if (!res.ok) throw new CogneeError(`Failed to list fragments: ${res.statusText}`, res.status);
+
+  const items: Array<{ id: string; name: string; createdAt: string; mimeType: string }> = await res.json();
+  const sorted = [...items].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+
+  const fragments = await Promise.all(
+    sorted.map(async (item): Promise<Fragment> => {
+      const type: FragmentType = item.name.startsWith('photo_') ? 'photo' : 'text';
+      let preview = '';
+
+      if (type === 'text') {
+        try {
+          const raw = await authedFetch(
+            `/api/v1/datasets/${config.DEFAULT_DATASET_ID}/data/${item.id}/raw`,
+            { method: 'GET' },
+          );
+          if (raw.ok) {
+            const text = await raw.text();
+            preview = text.replace(/<!--.*?-->/gs, '').trim().slice(0, 120);
+          }
+        } catch {
+          // preview stays empty on failure
+        }
+      }
+
+      return { id: item.id, name: item.name, type, createdAt: new Date(item.createdAt), preview };
+    }),
+  );
+
+  return fragments;
 }
