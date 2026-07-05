@@ -133,7 +133,7 @@ function Page1Illustration({ active }: { active: boolean }) {
 
       {/* Wolf center */}
       <Animated.View style={[styles.concentric, centerStyle]}>
-        <Image source={require('@/assets/images/icon.png')} style={{ width: 70, height: 70 }} contentFit="contain" />
+        <Image source={require('@/assets/images/onb.png')} style={{ width: 70, height: 70 }} contentFit="contain" />
       </Animated.View>
 
       {/* Orbiting icons — outer View positions, inner Animated.View scales */}
@@ -167,33 +167,62 @@ function Page1Illustration({ active }: { active: boolean }) {
 }
 
 // ─── Page 2 illustration — AI connects everything ─────────────────────────────
-// left = marginLeft from 50% — symmetric: left col ≈ -W*0.48, right col ≈ W*0.12, center ≈ -75
-const MEMORY_CARDS = [
-  { icon: 'mic' as const,            label: 'Voice Note', line1: '',                    line2: '9:41 PM', top: 10,  left: -W * 0.48, color: PURPLE },
-  { icon: 'camera' as const,         label: 'Receipt',    line1: 'Mirage Bar  ₹1,250',  line2: '8:33 PM', top: 10,  left:  W * 0.12,  color: '#F5A623' },
-  { icon: 'location-sharp' as const, label: 'Location',   line1: 'Mirage, Koramangala', line2: '9:15 PM', top: 115, left: -W * 0.48, color: PURPLE },
-  { icon: 'person' as const,         label: 'Person',     line1: 'Met Doug',            line2: '9:20 PM', top: 115, left:  W * 0.12,  color: PURPLE },
-  { icon: 'document-text' as const,  label: 'Note',       line1: 'Discussed the funding deck idea.', line2: '10:02 PM', top: 210, left: -75, color: '#F5A623' },
+const NODE_R = 100; // orbit radius for chips
+
+const AI_NODES = [
+  { icon: 'mic' as const,            label: 'Voice',    angleDeg: 0   },
+  { icon: 'location-sharp' as const, label: 'Location', angleDeg: 270 },
+  { icon: 'camera' as const,         label: 'Photo',    angleDeg: 90  },
+  { icon: 'person' as const,         label: 'Person',   angleDeg: 150 },
+  { icon: 'document-text' as const,  label: 'Note',     angleDeg: 210 },
 ];
+
+function nodePos(angleDeg: number) {
+  const rad = (angleDeg * Math.PI) / 180;
+  return { x: Math.round(NODE_R * Math.sin(rad)), y: Math.round(-NODE_R * Math.cos(rad)) };
+}
+
+// A dashed line from center (0,0) to (x,y) drawn as a thin rotated View
+function DashLine({ x, y }: { x: number; y: number }) {
+  const length = Math.round(Math.sqrt(x * x + y * y));
+  const angle  = Math.atan2(y, x) * (180 / Math.PI);
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+        width: length,
+        height: 1,
+        borderWidth: 0,
+        borderTopWidth: 1,
+        borderColor: PURPLE + '55',
+        borderStyle: 'dashed',
+        transformOrigin: 'left center',
+        transform: [{ rotate: `${angle}deg` }],
+      }}
+    />
+  );
+}
 
 function Page2Illustration({ active }: { active: boolean }) {
   const centerScale   = useSharedValue(0.6);
   const centerOpacity = useSharedValue(0);
-  const cardScales    = MEMORY_CARDS.map(() => useSharedValue(0));
-  const cardOpacities = MEMORY_CARDS.map(() => useSharedValue(0));
+  const nodeScales    = AI_NODES.map(() => useSharedValue(0));
+  const nodeOpacities = AI_NODES.map(() => useSharedValue(0));
 
   useEffect(() => {
     if (active) {
       centerScale.value   = withTiming(1, { duration: 400, easing: EASE_OUT });
       centerOpacity.value = withTiming(1, { duration: 400 });
-      MEMORY_CARDS.forEach((_, i) => {
-        cardScales[i].value   = withDelay(150 + i * 90, withTiming(1, { duration: 300, easing: EASE_OUT }));
-        cardOpacities[i].value = withDelay(150 + i * 90, withTiming(1, { duration: 250 }));
+      AI_NODES.forEach((_, i) => {
+        nodeScales[i].value   = withDelay(150 + i * 90, withTiming(1, { duration: 300, easing: EASE_OUT }));
+        nodeOpacities[i].value = withDelay(150 + i * 90, withTiming(1, { duration: 250 }));
       });
     } else {
       centerScale.value   = 0.6;
       centerOpacity.value = 0;
-      MEMORY_CARDS.forEach((_, i) => { cardScales[i].value = 0; cardOpacities[i].value = 0; });
+      AI_NODES.forEach((_, i) => { nodeScales[i].value = 0; nodeOpacities[i].value = 0; });
     }
   }, [active]);
 
@@ -202,43 +231,57 @@ function Page2Illustration({ active }: { active: boolean }) {
     transform: [{ scale: centerScale.value }],
   }));
 
-  const cardStyles = MEMORY_CARDS.map((_, i) =>
+  const nodeStyles = AI_NODES.map((_, i) =>
     useAnimatedStyle(() => ({
-      opacity: cardOpacities[i].value,
-      transform: [{ scale: cardScales[i].value }],
+      opacity: nodeOpacities[i].value,
+      transform: [{ scale: nodeScales[i].value }],
     }))
   );
 
   return (
     <View style={styles.illustrationContainer}>
-      {/* Concentric circles */}
+      {/* Concentric dark circles */}
       <View style={[styles.concentric, { width: 200, height: 200, borderRadius: 100, backgroundColor: '#0d0d14' }]} />
-      <View style={[styles.concentric, { width: 140, height: 140, borderRadius: 70,  backgroundColor: '#10101a' }]} />
-      <View style={[styles.concentric, { width: 90,  height: 90,  borderRadius: 45,  backgroundColor: '#14141f' }]} />
+      <View style={[styles.concentric, { width: 130, height: 130, borderRadius: 65,  backgroundColor: '#10101a' }]} />
 
-      {/* Brain / AI center icon */}
+      {/* Dashed connection lines (behind center) */}
+      {AI_NODES.map((node, i) => {
+        const pos = nodePos(node.angleDeg);
+        return <DashLine key={i} x={pos.x} y={pos.y} />;
+      })}
+
+      {/* Center AI brain */}
       <Animated.View style={[styles.concentric, styles.brainCenter, centerStyle]}>
-        <Ionicons name="analytics" size={40} color={TEXT} />
+        <Ionicons name="analytics" size={36} color={TEXT} />
       </Animated.View>
 
-      {/* Memory cards */}
-      {MEMORY_CARDS.map((card, i) => (
-        <Animated.View key={i} style={[styles.memCard, { top: card.top, left: '50%', marginLeft: card.left }, cardStyles[i]]}>
-          {/* Purple dot connector */}
-          <View style={styles.connectorDot} />
-          <View style={styles.memCardInner}>
-            <View style={styles.memCardHeader}>
-              <View style={[styles.memCardIcon, { backgroundColor: card.color + '22' }]}>
-                <Ionicons name={card.icon} size={14} color={card.color} />
+      {/* Nodes — same trig pattern as page 1 */}
+      {AI_NODES.map((node, i) => {
+        const pos = nodePos(node.angleDeg);
+        return (
+          <View
+            key={i}
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: '50%',
+              transform: [
+                { translateX: pos.x - 36 },
+                { translateY: pos.y - 36 },
+              ],
+            }}
+          >
+            <Animated.View style={nodeStyles[i]}>
+              <View style={styles.aiChip}>
+                <View style={styles.aiChipDot}>
+                  <Ionicons name={node.icon} size={14} color={PURPLE} />
+                </View>
+                <Text style={styles.aiChipLabel}>{node.label}</Text>
               </View>
-              <Text style={styles.memCardLabel}>{card.label}</Text>
-            </View>
-            {card.label === 'Voice Note' && <Waveform color={PURPLE} />}
-            {card.line1 ? <Text style={styles.memCardLine1} numberOfLines={2}>{card.line1}</Text> : null}
-            <Text style={styles.memCardTime}>{card.line2}</Text>
+            </Animated.View>
           </View>
-        </Animated.View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -294,16 +337,9 @@ function Page3Illustration({ active }: { active: boolean }) {
   );
 
   return (
-    <View style={[styles.illustrationContainer, { height: 280 }]}>
+    <View style={styles.illustrationContainer}>
       {/* Dashed ring */}
       <View style={[styles.dashedRing, { width: 290, height: 290, borderRadius: 145 }]} />
-
-      {/* Orbiting icons */}
-      {ORBIT3.map((item, i) => (
-        <Animated.View key={i} style={[styles.orbitItem, { top: '50%', left: '50%', marginTop: item.top, marginLeft: item.left }, orbitStyles[i]]}>
-          <IconCircle name={item.name} size={18} diameter={48} color={PURPLE} bg="#0e0e18" border={PURPLE + '44'} />
-        </Animated.View>
-      ))}
 
       {/* Phone mockup */}
       <Animated.View style={[styles.phoneMockup, phoneStyle]}>
@@ -357,7 +393,7 @@ export default function OnboardingScreen() {
 
   async function finish() {
     await FileSystem.writeAsStringAsync(FLAG, '1').catch(() => {});
-    router.replace('/(tabs)/');
+    router.replace('/login');
   }
 
   function next() {
@@ -524,54 +560,27 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
 
-  // Page 2 memory cards
-  memCard: {
-    position: 'absolute',
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 4,
-  },
-  connectorDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: PURPLE,
-    marginTop: 12,
-  },
-  memCardInner: {
-    backgroundColor: '#18181f',
-    borderRadius: 12,
-    padding: 10,
-    width: 140,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: '#2a2a3a',
-  },
-  memCardHeader: {
-    flexDirection: 'row',
+  // Page 2 AI node chips
+  aiChip: {
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
+    width: 72,
   },
-  memCardIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+  aiChipDot: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#16162a',
+    borderWidth: 1,
+    borderColor: PURPLE + '66',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  memCardLabel: {
-    color: TEXT,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  memCardLine1: {
+  aiChipLabel: {
     color: MUTED,
     fontSize: 10,
-    lineHeight: 14,
-  },
-  memCardTime: {
-    color: '#555',
-    fontSize: 9,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 
   // Page 3 phone

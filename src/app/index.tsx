@@ -17,5 +17,5 @@ export default function Root() {
   }, []);
 
   if (!checked) return <View style={{ flex: 1, backgroundColor: '#000' }} />;
-  return <Redirect href="/onboarding" />; // TEMP: always show onboarding for testing
+  return <Redirect href={done ? '/login' : '/onboarding'} />;
 }

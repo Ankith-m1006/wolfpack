@@ -18,6 +18,7 @@ import {
   type GraphData,
   type GraphNode,
 } from '@/services/cognee';
+import { calculateCompleteness } from '@/utils/completeness';
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
 const BG     = '#000';
@@ -207,6 +208,61 @@ function MomentRow({ moment, isFirst, isLast }: { moment: TimelineMoment; isFirs
   );
 }
 
+// ─── Completeness ring ───────────────────────────────────────────────────────
+const RING_SIZE = 88;
+const RING_STROKE = 8;
+const RING_TRACK = '#2A2A2A';
+
+function CompletenessRing({ percent }: { percent: number }) {
+  const clamped = Math.min(100, Math.max(0, percent));
+
+  // Seam-free sweep: a solid top-half rectangle rotates around the ring's
+  // center; intersecting it with a fixed left/right clip window traces out
+  // the filled wedge. R = angle-90 (right window, 0-50%) and R2 = 90+angle2
+  // (left window, 50-100%) align the wedge to a clockwise sweep starting at
+  // 12 o'clock. Unlike a border-color-side trick, there's no color blending
+  // at rounded corners, so no visible gap in the fill.
+  const rightAngle = (Math.min(clamped, 50) / 50) * 180;
+  const rightRotate = rightAngle - 90;
+
+  const leftAngle = (Math.max(clamped - 50, 0) / 50) * 180;
+  const leftRotate = 90 + leftAngle;
+
+  return (
+    <View style={styles.ringWrap}>
+      <View style={styles.ringOuterClip}>
+        <View style={styles.ringHalfLeft}>
+          <View style={[styles.ringWedgeSquare, { left: 0, transform: [{ rotate: `${leftRotate}deg` }] }]}>
+            <View style={styles.ringWedgeTop} />
+          </View>
+        </View>
+        <View style={styles.ringHalfRight}>
+          <View style={[styles.ringWedgeSquare, { left: -RING_SIZE / 2, transform: [{ rotate: `${rightRotate}deg` }] }]}>
+            <View style={styles.ringWedgeTop} />
+          </View>
+        </View>
+        <View style={styles.ringHole} />
+      </View>
+
+      <View style={styles.ringCenter}>
+        <Text style={styles.ringPercentText}>{Math.round(clamped)}%</Text>
+      </View>
+    </View>
+  );
+}
+
+function CompletenessMeter({ percent, label, gaps }: { percent: number; label: string; gaps: string[] }) {
+  return (
+    <View style={styles.completeness}>
+      <CompletenessRing percent={percent} />
+      <Text style={styles.completenessLabel}>{label}</Text>
+      {gaps.map(gap => (
+        <Text key={gap} style={styles.completenessGap}>{gap}</Text>
+      ))}
+    </View>
+  );
+}
+
 // ─── Scrubber ────────────────────────────────────────────────────────────────
 function Scrubber({
   startTime,
@@ -304,6 +360,8 @@ export default function ReconstructScreen() {
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fragments, setFragments] = useState<Fragment[]>([]);
+  const [graph, setGraph] = useState<GraphData>({ nodes: [], edges: [] });
 
   // Scroll state
   const scrollRef = useRef<ScrollView>(null);
@@ -317,9 +375,11 @@ export default function ReconstructScreen() {
 
   useEffect(() => {
     Promise.all([getGraph(), listFragments()])
-      .then(([graph, frags]) => {
+      .then(([graphData, frags]) => {
         setTotalCount(frags.length);
-        setTimeline(buildTimeline(graph, frags));
+        setTimeline(buildTimeline(graphData, frags));
+        setFragments(frags);
+        setGraph(graphData);
       })
       .catch(e => setError(e instanceof Error ? e.message : 'Failed to load timeline.'))
       .finally(() => setLoading(false));
@@ -348,6 +408,11 @@ export default function ReconstructScreen() {
 
   const startTime = timeline.length > 0 ? timeline[0].time : '—';
   const endTime   = timeline.length > 0 ? timeline[timeline.length - 1].time : '—';
+
+  const completeness = useMemo(
+    () => calculateCompleteness(fragments, graph),
+    [fragments, graph],
+  );
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -382,6 +447,13 @@ export default function ReconstructScreen() {
           <Text style={styles.subtext}>
             Visualize your memories as a connected story across places, people and moments.
           </Text>
+          {!loading && !error && (
+            <CompletenessMeter
+              percent={completeness.percent}
+              label={completeness.label}
+              gaps={completeness.gaps}
+            />
+          )}
           <View style={styles.statusPill}>
             <Ionicons name="sparkles" size={14} color={PURPLE} />
             <Text style={styles.statusText}>
@@ -463,6 +535,34 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   statusText: { color: PURPLE, fontSize: 14, fontWeight: '500' },
+
+  completeness: { alignItems: 'center', gap: 6, marginVertical: 4 },
+  ringWrap: { width: RING_SIZE, height: RING_SIZE, alignItems: 'center', justifyContent: 'center' },
+  ringOuterClip: {
+    position: 'absolute',
+    width: RING_SIZE,
+    height: RING_SIZE,
+    borderRadius: RING_SIZE / 2,
+    overflow: 'hidden',
+    backgroundColor: RING_TRACK,
+  },
+  ringHalfLeft: { width: RING_SIZE / 2, height: RING_SIZE, position: 'absolute', left: 0, overflow: 'hidden' },
+  ringHalfRight: { width: RING_SIZE / 2, height: RING_SIZE, position: 'absolute', left: RING_SIZE / 2, overflow: 'hidden' },
+  ringWedgeSquare: { position: 'absolute', width: RING_SIZE, height: RING_SIZE },
+  ringWedgeTop: { position: 'absolute', top: 0, left: 0, width: RING_SIZE, height: RING_SIZE / 2, backgroundColor: PURPLE },
+  ringHole: {
+    position: 'absolute',
+    top: RING_STROKE,
+    left: RING_STROKE,
+    width: RING_SIZE - RING_STROKE * 2,
+    height: RING_SIZE - RING_STROKE * 2,
+    borderRadius: (RING_SIZE - RING_STROKE * 2) / 2,
+    backgroundColor: BG,
+  },
+  ringCenter: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
+  ringPercentText: { color: TEXT, fontSize: 18, fontWeight: '800' },
+  completenessLabel: { color: TEXT, fontSize: 14, fontWeight: '600' },
+  completenessGap: { color: MUTED, fontSize: 12 },
   errorText:  { color: '#FF5252', fontSize: 14, textAlign: 'center', marginTop: 40, paddingHorizontal: 24 },
   emptyText:  { color: MUTED,    fontSize: 14, textAlign: 'center', marginTop: 40, paddingHorizontal: 24 },
 

@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { listFragments, recall } from '@/services/cognee';
+import { RecallSource } from '@/types/cognee';
 
 type MessageRole = 'user' | 'assistant' | 'error';
 
@@ -23,6 +24,7 @@ type Message = {
   role: MessageRole;
   text: string;
   timestamp: Date;
+  sources?: RecallSource[];
 };
 
 const SUGGESTIONS = [
@@ -41,7 +43,20 @@ export default function AskScreen() {
   const [loading, setLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [memoryCount, setMemoryCount] = useState(0);
+  const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
   const scrollRef = useRef<ScrollView>(null);
+
+  function toggleSources(messageId: string) {
+    setExpandedSources(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     listFragments().then(f => setMemoryCount(f.length)).catch(() => {});
@@ -79,12 +94,13 @@ export default function AskScreen() {
     setLoading(true);
 
     try {
-      const answer = await recall(trimmed);
+      const { answer, sources } = await recall(trimmed);
       const assistantMsg: Message = {
         id: `${Date.now()}-assistant`,
         role: 'assistant',
         text: answer || '(No answer returned)',
         timestamp: new Date(),
+        sources,
       };
       setMessages(prev => [...prev, assistantMsg]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -175,13 +191,47 @@ export default function AskScreen() {
               );
             }
 
+            const hasSources = !!msg.sources && msg.sources.length > 0;
+            const isExpanded = expandedSources.has(msg.id);
+
             return (
               <View key={msg.id} style={styles.assistantRow}>
                 <View style={styles.assistantBubble}>
                   <Text style={styles.assistantText}>{msg.text}</Text>
                   <Text style={styles.assistantTimestamp}>{formatTime(msg.timestamp)}</Text>
-                  {/* TODO: Sources Used card — needs recall() to return source metadata */}
                 </View>
+
+                {hasSources && (
+                  <View style={styles.sourcesContainer}>
+                    <TouchableOpacity
+                      style={styles.sourcesToggle}
+                      onPress={() => toggleSources(msg.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="link-outline" size={14} color="#888" />
+                      <Text style={styles.sourcesToggleText}>Sources Used</Text>
+                      <Ionicons
+                        name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={14}
+                        color="#888"
+                      />
+                    </TouchableOpacity>
+
+                    {isExpanded && (
+                      <View style={styles.sourcesList}>
+                        {msg.sources!.map((source, i) => (
+                          <View key={`${msg.id}-source-${i}`} style={styles.sourceCard}>
+                            <View style={styles.sourceHeader}>
+                              <Ionicons name="document-text-outline" size={14} color="#888" />
+                              <Text style={styles.sourceName}>{source.documentName}</Text>
+                            </View>
+                            <Text style={styles.sourceText}>&ldquo;{source.text}&rdquo;</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                )}
               </View>
             );
           })}
@@ -360,6 +410,48 @@ const styles = StyleSheet.create({
     color: '#FF5252',
     fontSize: 14,
     lineHeight: 20,
+  },
+  sourcesContainer: {
+    alignSelf: 'flex-start',
+    maxWidth: '80%',
+    marginTop: 4,
+    gap: 8,
+  },
+  sourcesToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 4,
+  },
+  sourcesToggleText: {
+    color: '#888',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sourcesList: {
+    gap: 8,
+  },
+  sourceCard: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 12,
+    padding: 12,
+    gap: 6,
+  },
+  sourceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sourceName: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  sourceText: {
+    color: '#aaa',
+    fontSize: 13,
+    lineHeight: 18,
+    fontStyle: 'italic',
   },
   inputRow: {
     flexDirection: 'row',

@@ -5,11 +5,13 @@ import {
   LoginResponse,
   RecallRequest,
   RecallResponse,
+  RecallResult,
+  RecallSource,
 } from "../types/cognee";
 
 let authToken: string | null = null;
 
-// Wraps fetch with the bearer token; retries once on 401 by re-logging in.
+
 async function authedFetch(
   path: string,
   init: RequestInit,
@@ -24,7 +26,7 @@ async function authedFetch(
   });
 
   if (res.status === 401 && retry) {
-    // Token expired or invalidated — refresh and try once more.
+
     authToken = null;
     await login();
     return authedFetch(path, init, false);
@@ -33,10 +35,10 @@ async function authedFetch(
   return res;
 }
 
-export async function login(): Promise<void> {
+export async function login(email?: string, password?: string): Promise<void> {
   const body = new URLSearchParams({
-    username: config.AUTH_EMAIL,
-    password: config.AUTH_PASSWORD,
+    username: email ?? config.AUTH_EMAIL,
+    password: password ?? config.AUTH_PASSWORD,
   });
 
   const res = await fetch(`${config.API_BASE_URL}/api/v1/auth/login`, {
@@ -59,14 +61,23 @@ async function ensureLoggedIn(): Promise<void> {
   }
 }
 
+function formatCaptureTimestamp(date: Date): string {
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export async function remember(text: string): Promise<void> {
   await ensureLoggedIn();
   console.log('[cognee] remember: starting /remember');
 
-  // Write to a temp file — RN fetch can't serialize a Blob directly in FormData.
+  const contextualText = `[Captured on ${formatCaptureTimestamp(new Date())}]: ${text}`;
+
   const filename = `memory_${Date.now()}.txt`;
   const tempUri = `${FileSystem.cacheDirectory}${filename}`;
-  await FileSystem.writeAsStringAsync(tempUri, text, { encoding: "utf8" });
+  await FileSystem.writeAsStringAsync(tempUri, contextualText, { encoding: "utf8" });
 
   const formData = new FormData();
   formData.append('data', { uri: tempUri, type: 'text/plain', name: filename } as unknown as Blob);
@@ -94,7 +105,35 @@ export async function rememberPhoto(localUri: string): Promise<void> {
 }
 
 
-export async function recall(query: string): Promise<string> {
+
+const EVIDENCE_LINE_RE = /document\s+(\S+).*?:\s*"([^"]*)"\s*$/;
+
+function parseRecallText(raw: string): RecallResult {
+  const marker = "Evidence:";
+  const markerIndex = raw.indexOf(marker);
+
+  if (markerIndex === -1) {
+    return { answer: raw.trim(), sources: [] };
+  }
+
+  const answer = raw.slice(0, markerIndex).trim();
+  const evidenceBlock = raw.slice(markerIndex + marker.length);
+
+  const sources: RecallSource[] = [];
+  for (const line of evidenceBlock.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const match = trimmed.match(EVIDENCE_LINE_RE);
+    if (!match) continue;
+
+    sources.push({ documentName: match[1].trim(), text: match[2].trim() });
+  }
+
+  return { answer, sources };
+}
+
+export async function recall(query: string): Promise<RecallResult> {
   await ensureLoggedIn();
   console.log('[cognee] recall: starting /recall');
 
@@ -102,6 +141,7 @@ export async function recall(query: string): Promise<string> {
     query,
     datasets: [config.DEFAULT_DATASET],
     searchType: "GRAPH_COMPLETION",
+    includeReferences: true,
   };
 
   const res = await authedFetch("/api/v1/recall", {
@@ -118,9 +158,7 @@ export async function recall(query: string): Promise<string> {
 
   const data: RecallResponse = await res.json();
   console.log('[cognee] /recall raw response:', JSON.stringify(data));
-
-  // Return the top result's text, or empty string if nothing came back.
-  return data[0]?.text ?? "";
+  return parseRecallText(data[0]?.text ?? "");
 }
 
 export type FragmentType = 'photo' | 'text';
@@ -189,7 +227,6 @@ export async function listFragments(): Promise<Fragment[]> {
             preview = text.replace(/<!--.*?-->/gs, '').trim().slice(0, 120);
           }
         } catch {
-          // preview stays empty on failure
         }
       }
 

@@ -11,6 +11,7 @@ export interface RecallRequest {
   query: string;
   datasets: string[];
   searchType: "GRAPH_COMPLETION";
+  includeReferences: true;
 }
 
 // The API returns an array of result objects; we extract the top answer text.
@@ -21,6 +22,16 @@ export interface RecallResultItem {
 }
 
 export type RecallResponse = RecallResultItem[];
+
+export interface RecallSource {
+  documentName: string;
+  text: string;
+}
+
+export interface RecallResult {
+  answer: string;
+  sources: RecallSource[];
+}
 
 export class CogneeError extends Error {
   constructor(

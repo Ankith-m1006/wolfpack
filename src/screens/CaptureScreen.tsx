@@ -379,7 +379,8 @@ export default function CaptureScreen() {
     setError(null);
     try {
       if (!transcript) throw new Error('No speech detected — please try again.');
-      await remember(transcript);
+      // Invisible marker so completeness scoring can distinguish voice captures from typed text.
+      await remember(`[voice] ${transcript}`);
       console.log('[voice] transcript saved to Cognee');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showTickAnimation();
