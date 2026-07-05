@@ -13,7 +13,7 @@ Wolfpack is an AI memory companion built for the **WeMakeDevs × Cognee Hackatho
 | | |
 |---|---|
 | **Live app (Android APK)** | [Download Wolfpack.apk](https://github.com/Ankith-m1006/wolfpack/releases/download/v1.0.0/wolfpack.apk) |
-| **Landing page** | *(your Vercel URL here)* |
+| **Landing page** | `https://wolfpack-dun.vercel.app` |
 | **Demo video (3 min)** | [Watch on YouTube](https://youtu.be/iblp05lh6d4) |
 | **Live backend (Railway)** | `https://wolfpack-backend-production.up.railway.app` |
 | **Backend repo** | [wolfpack-backend](https://github.com/Ankith-m1006/wolfpack-backend) |
